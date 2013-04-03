@@ -1,0 +1,155 @@
+#!/bin/bash
+
+#
+# MKLIBS - Simple dependency parser
+# author Tristan Lelong <tristan.lelong@blunderer.org>
+#
+
+locate_lib()
+{
+	INPUT=$*
+
+	for needed in $INPUT; do
+		# check if file valid relative path or absolute one
+		if [ -e $needed ]; then
+			echo $needed
+			continue
+		fi
+		# check if file exist in LD_PATH
+		for path in $LD_PATH; do
+			if [ -e $path/$needed ]; then 
+				echo $(dirname $path/$needed)/$(basename $path/$needed)
+				break
+			fi
+		done
+	done | sort | uniq
+}
+
+calculate_deps()
+{
+	CNT=0
+	BASE=$#
+	INPUT=$*
+
+	while true; do 
+		CNT=0
+
+		# calculate dependencies for all input files
+		NEEDED=$(for input in $INPUT; do 
+				[ -f $input ] && readelf -d $input | grep NEEDED | awk '{print $5}' | tr -d "[]" && continue
+				for path in $LD_PATH; do
+					[ -f $path/$input ] && readelf -d $path/$input | grep NEEDED | awk '{print $5}' | tr -d "[]" && continue
+				done
+			done | sort | uniq)
+
+		# check if we have some new dependencies to analyze
+		for needed in $NEEDED; 
+			do CNT=$((CNT+1)); 
+		done
+		
+		# if no new file since last iteration: exit
+		if [ $BASE -eq $CNT ]; then 
+			break
+		fi
+
+		# else add new dependencies to the list and recursively check for their dependencies
+		INPUT=$(echo "$INPUT $NEEDED" | xargs -n 1 | sort | uniq)
+		BASE=$CNT
+	done
+
+	for input in $INPUT; do
+		if echo $1 | grep -q $input; then
+			:
+		else
+			echo $input
+		fi	
+	done
+}
+
+usage()
+{
+	echo "MKLIBS - Simple dependency parser"
+	echo ""
+	echo "mklibs will parse all dependencies of targeted binaries and copy them to the output directory"
+	echo ""
+	echo "usage: $0 [ -L<path> ] [ -m<mode>] [ -o<output_dir> ] [ -s ] <binary1> [binary2] ..."
+	echo "  -L<path>: where to look for dependencies. (default \$LD_LIBRARY_PATH)"
+	echo "  -m<mode>: chmod to octal value when installing. (default 644)"
+	echo "  -o<output_dir>: copy all dependencies to this directory. (default no copy)"
+	echo "  -s: strip when installing"
+	echo "  <binary>: binary to search dependencies for"
+	echo ""
+	echo "For cross architecture analysis, use CROSS_COMPILE prefix: CROSS_COMPILE=arm-unknown-linux-gnueabi-"
+	exit 1
+}
+
+#
+# MAIN
+#
+LD_PATH=
+OUTDIR=
+MODE=644
+STRIP=
+
+# parse command line arguments
+while true; do
+	NEXT=$1
+	ARG=${NEXT:0:2}
+	VAL=${NEXT:2}
+
+	if [ "$ARG" = "-L" ]; then
+		LD_PATH="$LD_PATH $VAL"
+		shift 1
+	elif [ "$ARG" = "-o" ]; then
+		OUTDIR=$VAL
+		shift 1
+	elif [ "$ARG" = "-m" ]; then
+		MODE=$VAL
+		shift 1
+	elif [ "$ARG" = "-s" ]; then
+		STRIP=-s
+		shift 1
+	elif [ "$ARG" = "-h" ]; then
+		usage
+	else
+		break;
+	fi
+done
+
+if [ -z "$LD_PATH" ]; then
+	LD_PATH=$(echo $LD_LIBRARY_PATH | tr ":" " ")
+fi
+
+# test if output dir exists
+if [ ! -z "$OUTDIR" -a ! -d "$OUTDIR" ]; then
+	echo "Error: $OUTDIR doesn't exist"
+	exit 1
+fi
+
+# filter all ELF binaries as input
+INPUT=$(for input in $*; do file $input | grep ELF | cut -d: -f 1; done)
+if [ -z "$INPUT" ]; then
+	echo "Error: no ELF input file."
+	echo ""
+	usage
+fi
+
+# select input binaries
+echo "# Processing binaries: $INPUT"
+
+# calculate dependencies
+NEEDED=$(calculate_deps $INPUT)
+
+# copy binaries
+for needed in $NEEDED; do
+	present=$(locate_lib $needed)
+	if [ -n "$present" ]; then
+		echo "- Install -m $MODE $STRIP $present"
+		if [ -n "$OUTDIR" ]; then
+			install -m $MODE $STRIP $present $OUTDIR
+		fi
+	else
+		echo "- Missing $needed"
+	fi
+done
+

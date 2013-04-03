@@ -1,0 +1,15 @@
+#
+# MKLIB - Simple dependency generator
+# Author: Tristan Lelong <tristan.lelong@blundere.org>
+#
+
+mklibs is a shell tool to list and/or copy all required libraries in order to have a working set of binaries.
+Typical usage is when building an embedded system:
+
+$ mklibs -L<path-to-toolchain-lib> -L<path-to-staging-dir-lib> -m 644 -s -o<rootfs/lib rootfs>/bin/*
+
+This script depends on nothing but BASH.
+This script doesn't remove sections or from libraries.
+
+This script is licensed as WTFPL (Do What The Fuck You Want Public License: http://www.wtfpl.net/)
+
